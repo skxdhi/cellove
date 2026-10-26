@@ -5,8 +5,9 @@ local Intaker = setmetatable({
     k3 = 43,
     title = "Intaker",
     description = "Pulls cells that are in front of it towards it. The front acts like a trash cell.",
-    categories = { "intakers" }
-    subtick = { 43 }
+    categories = { "intakers" },
+    subtick = { 43 },
+    directional = True
 }, { __index = BaseCell })
 Intaker.__index = Intaker
 
