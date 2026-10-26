@@ -9,8 +9,8 @@ local Intaker = setmetatable({
 }, { __index = BaseCell })
 Intaker.__index = Intaker
 
-function Intaker:eats(dx,dy)
-    return self
+function Intaker:eats(dx, dy)
+    return self:_alignment(dx, dy) == 1
 end
 
 return Intaker
