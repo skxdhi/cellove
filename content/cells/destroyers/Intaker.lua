@@ -16,7 +16,7 @@ function Intaker:eats(dx, dy)
 end
 
 function Intaker:update(_, dir)
-
+    --- uh idk
 end
 
 return Intaker
