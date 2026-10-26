@@ -13,4 +13,8 @@ function Intaker:eats(dx, dy)
     return self:_alignment(dx, dy) == 1
 end
 
+function Intaker:update(_, dir)
+
+end
+
 return Intaker
