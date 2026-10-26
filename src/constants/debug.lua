@@ -79,6 +79,7 @@ return {
                 { label = "1", keys = { "1" } },
                 { label = "2", keys = { "2" } },
                 { label = "3", keys = { "3" } },
+                { label = "4", keys = { "4" } },
                 { label = "Tab", keys = { "tab" } }
             },
             {
@@ -135,6 +136,8 @@ return {
                 sim = "sim: %s  tick: %d  subtick: %d  pass: %d",
                 speed = "interval: %.0f ms  progress: %d%%",
                 grid = "grid: %dx%d  cells: %d  dying: %d  blasts: %d",
+                tick = "last tick: sim %.1f ms  post %.1f ms  alloc %.2f MB  moved %d",
+                render = "last redraw: collect %.1f ms  layer %.1f ms",
                 camera = "camera: %.1f, %.1f  zoom: %.2f (%.2f)",
                 tool = "tool: %s  cell: %s  rotation: %d  history: %d",
                 markers = "markers: %d  contraption: %s",

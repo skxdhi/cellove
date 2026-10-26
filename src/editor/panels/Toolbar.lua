@@ -2,6 +2,7 @@ local Widget = require("src/ui/abstract/Widget")
 local IconButton = require("src/ui/widgets/IconButton")
 local Panel = require("src/ui/Panel")
 local Lift = require("src/ui/decor/Lift")
+local Shine = require("src/ui/decor/Shine")
 local Tooltip = require("src/ui/overlays/Tooltip")
 local Audio = require("src/engine/audio/Audio")
 local constants = require("src/constants")
@@ -31,6 +32,7 @@ function Toolbar.new(data)
     self.renderer = data.renderer
     self.registry = data.registry
     self.settings = data.settings
+    self.fresh = data.fresh
     self.on = data.on
     self.tooltip = Tooltip.new(data.renderer)
     self.items = {}
@@ -45,7 +47,15 @@ function Toolbar.new(data)
     self.next = button(data.renderer, config.arrow)
 
     data.settings:listen("toolbar", function(layout) self:_parse(layout) end)
+    self:_migrate()
     return self
+end
+
+function Toolbar:_migrate()
+    for _, id in ipairs(config.layout) do
+        local class = self.registry.cells[id]
+        if class and self.fresh:has(class) then self:add(class) end
+    end
 end
 
 function Toolbar:_parse(layout)
@@ -158,10 +168,12 @@ function Toolbar:_drawSlot(slot, selected, rotation)
     local hover = self.hover[slot.class] or 0
     local scale = config.slot / tw * (1 + config.hover.growth * hover)
     local alpha = slot.class == selected and 1 or 0.5 + 0.25 * hover
+    local x, y = (self.xs[slot.class] or slot.x) + config.slot / 2, slot.y + config.slot / 2 - config.hover.lift * hover
 
     love.graphics.setColor(utils.fromHex(colors.white, alpha))
-    love.graphics.draw(texture, (self.xs[slot.class] or slot.x) + config.slot / 2, slot.y + config.slot / 2 - config.hover.lift * hover,
-        rotation * math.pi / 2, scale, scale, tw / 2, th / 2)
+    Shine.set(self.fresh:has(slot.class))
+    love.graphics.draw(texture, x, y, rotation * math.pi / 2, scale, scale, tw / 2, th / 2)
+    Shine.set(false)
 end
 
 function Toolbar:_drawCard(class, state, rotation)
@@ -204,6 +216,10 @@ end
 
 function Toolbar:toggle(class)
     if self:has(class) then self:remove(class) else self:add(class) end
+end
+
+function Toolbar:restore()
+    self.settings:set("toolbar", self.settings.defaults.toolbar)
 end
 
 function Toolbar:setTool(id)
@@ -301,6 +317,7 @@ function Toolbar:mousereleased(x, y, button)
         self.settle = { class = drag.class, landing = Lift.release(drag.card) }
         self:_store()
     else
+        self.fresh:clear(drag.class)
         self.on.cell(drag.class)
     end
     self.drag = nil
@@ -332,7 +349,7 @@ function Toolbar:draw(selected, rotation)
         self.next:draw()
     end
 
-    love.graphics.setScissor(config.start - config.pad / 2, h - config.height, view.width, config.height)
+    love.graphics.setScissor(config.start - config.pad / 2, 0, view.width, h)
     local drag = self.drag and self.drag.active and self.drag
     local held = drag or self.settle
     for _, slot in ipairs(view.slots) do

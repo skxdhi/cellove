@@ -48,15 +48,22 @@ return {
                     description = "Paints the selected cell."
                 },
                 {
-                    id = "selector",
+                    id = "bucket",
                     key = "2",
+                    texture = "bucket",
+                    title = "Bucket",
+                    description = "Fills an area with the selected cell."
+                },
+                {
+                    id = "selector",
+                    key = "3",
                     texture = "select",
                     title = "Selector",
                     description = "Selects an area to copy, cut and paste."
                 },
                 {
                     id = "marker",
-                    key = "3",
+                    key = "4",
                     texture = "marker",
                     title = "Marker",
                     description = "Places visual markers and backgrounds."
@@ -435,6 +442,17 @@ return {
             size = 40,
             title = "Sort",
             description = "Changes how cells are ordered."
+        },
+        reset = {
+            texture = "rotator_180",
+            size = 40,
+            title = "Reset Toolbar",
+            description = "Restores the default toolbar layout.",
+            prompt = {
+                title = "Reset Toolbar",
+                message = "Restore the toolbar's orignal cell layout?",
+                confirm = "Reset"
+            }
         },
         add = { title = "Add to Toolbar", description = "Adds the cell to the toolbar." },
         remove = { title = "Remove from Toolbar", description = "Removes the cell from the toolbar." },

@@ -9,8 +9,10 @@ local Controls = require("src/editor/panels/Controls")
 local Brush = require("src/editor/tools/Brush")
 local Selector = require("src/editor/tools/Selector")
 local Marker = require("src/editor/tools/Marker")
+local Bucket = require("src/editor/tools/Bucket")
 local Prompt = require("src/ui/overlays/Prompt")
 local ColorPicker = require("src/ui/overlays/ColorPicker")
+local Fresh = require("src/engine/data/Fresh")
 local Markers = require("src/engine/simulation/Markers")
 local Properties = require("src/engine/registry/Properties")
 local Events = require("src/engine/modding/Events")
@@ -24,7 +26,8 @@ local colors = constants.ui.colors
 local tools = {
     brush = Brush,
     selector = Selector,
-    marker = Marker
+    marker = Marker,
+    bucket = Bucket
 }
 
 local function same(a, b)
@@ -65,10 +68,12 @@ function Editor.new(data)
         }
     })
     self.toolMenu = ToolMenu.new({ renderer = data.renderer, onPick = function(id) self:setTool(id) end })
+    self.fresh = Fresh.new({ registry = data.registry, settings = data.settings })
     self.toolbar = Toolbar.new({
         renderer = data.renderer,
         registry = data.registry,
         settings = data.settings,
+        fresh = self.fresh,
         on = {
             cell = function(class) self:select(self.selected ~= class and class or nil) end,
             menu = function() self.toolMenu:open(self.toolId) end,
@@ -79,6 +84,8 @@ function Editor.new(data)
         renderer = data.renderer,
         registry = data.registry,
         toolbar = self.toolbar,
+        prompt = self.prompt,
+        fresh = self.fresh,
         onPick = function(class) self:select(class) end
     })
     self.stampList = StampList.new({
@@ -437,7 +444,7 @@ function Editor:mousepressed(x, y, button)
 
     local gx, gy = self.renderer.camera:screenToGrid(x, y)
     if button == 3 then
-        self:_pick(gx, gy)
+        self.renderer.camera:grab(x, y)
         return true
     end
 
@@ -458,6 +465,7 @@ function Editor:mousemoved(x, y)
     self.stampList:mousemoved(x, y)
     self.panel:mousemoved(x, y)
     self.properties:mousemoved(x, y)
+    self.renderer.camera:drag(x, y)
 
     if self.drag then self.tool:move(self.renderer.camera:screenToGrid(x, y)) end
 end
@@ -470,6 +478,12 @@ function Editor:mousereleased(x, y, button)
     self.stampList:mousereleased()
     self.panel:mousereleased(x, y, button)
     self.properties:mousereleased(x, y, button)
+
+    if button == 3 then
+        local camera = self.renderer.camera
+        local grip = camera:release()
+        if grip and not grip.moved then self:_pick(camera:screenToGrid(x, y)) end
+    end
 
     if button ~= self.drag then return end
 

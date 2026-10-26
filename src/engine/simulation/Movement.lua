@@ -13,7 +13,14 @@ local function extend(cell, move, own)
     for _, point in ipairs(move.via) do
         path[#path + 1] = point
     end
-    path[#path + 1] = { move.x, move.y }
+
+    local size = #path
+    if not own and size > 1 and (cell.own or 0) < 2 then
+        local last = path[size]
+        last[1], last[2] = move.x, move.y
+    else
+        path[size + 1] = { move.x, move.y }
+    end
 
     if own then cell.own = (cell.own or 0) + #move.via + 1 end
 end
@@ -25,19 +32,33 @@ function Movement.new(data)
     local self = setmetatable({}, Movement)
     self.simulator = data.simulator
     self.grid = data.simulator.grid
-    self.walk = {}
+    self.pool = {}
+    self.top = 0
     self.stamp = 0
     self.dead = {}
+    self.moves = 0
     return self
 end
 
-function Movement:_seal(size)
-    local walk, dead, grid = self.walk, self.dead, self.grid
+function Movement:_take()
+    local top = self.top + 1
+    self.top = top
 
-    for i = size - 8, 1, -9 do
-        if walk[i + 8] ~= none then return end
-        local cell = walk[i]
-        dead[key(grid.width, cell.x, cell.y, walk[i + 5], walk[i + 6])] = grid.version
+    local move = self.pool[top]
+    if not move then
+        move = {}
+        self.pool[top] = move
+    end
+    return move
+end
+
+function Movement:_seal(chain, first)
+    local dead, grid = self.dead, self.grid
+
+    for i = #chain, first + 1, -1 do
+        local move = chain[i]
+        if move.via ~= none then return end
+        dead[key(grid.width, move.cell.x, move.cell.y, move.ox, move.oy)] = grid.version
     end
 end
 
@@ -61,7 +82,7 @@ function Movement:_step(x, y, dx, dy, reverse)
 
         local cell = grid:get(x, y)
         local nx, ny, spin
-        if cell then nx, ny, spin = cell:divert(dx, dy, reverse) end
+        if cell and getmetatable(cell).lookup.divert then nx, ny, spin = cell:divert(dx, dy, reverse) end
 
         if not nx then return x, y, dx, dy, reverse and -turn or turn, via, cell end
 
@@ -75,36 +96,29 @@ function Movement:_route(x, y, dx, dy, reverse)
     local nx, ny, ndx, ndy, turn, via, target = self:_step(x, y, dx, dy, reverse)
     if not nx then return end
 
-    return {
-        x = nx,
-        y = ny,
-        dx = ndx,
-        dy = ndy,
-        ox = dx,
-        oy = dy,
-        turn = turn,
-        via = via,
-        target = target
-    }
+    local move = self:_take()
+    move.x, move.y, move.dx, move.dy = nx, ny, ndx, ndy
+    move.ox, move.oy, move.turn, move.via, move.target = dx, dy, turn, via, target
+    return move
 end
 
 function Movement:_line(x, y, dx, dy, force, chain)
-    local grid, walk, dead = self.grid, self.walk, self.dead
+    local grid, dead = self.grid, self.dead
     local width, height, version = grid.width, grid.height, grid.version
     chain = chain or {}
 
     self.stamp = self.stamp + 1
-    local stamp, size = self.stamp, 0
+    local stamp, first = self.stamp, #chain
     for _, move in ipairs(chain) do
         move.cell.walked = stamp
     end
 
     local cell = grid:get(x, y)
     while true do
-        if x < 1 or x > width or y < 1 or y > height then return self:_seal(size) end
-        if not cell or cell:eats(dx, dy) then break end
+        if x < 1 or x > width or y < 1 or y > height then return self:_seal(chain, first) end
+        if not cell or cell:eats(dx, dy) then return chain end
         if cell.walked == stamp then return end
-        if dead[key(width, x, y, dx, dy)] == version or not cell:pushable(dx, dy) then return self:_seal(size) end
+        if dead[key(width, x, y, dx, dy)] == version or not cell:pushable(dx, dy) then return self:_seal(chain, first) end
 
         force = force + cell:force(dx, dy, "push")
         if force <= 0 then return end
@@ -113,26 +127,48 @@ function Movement:_line(x, y, dx, dy, force, chain)
         if not nx then return end
 
         cell.walked = stamp
-        walk[size + 1], walk[size + 2], walk[size + 3], walk[size + 4], walk[size + 5] = cell, nx, ny, ndx, ndy
-        walk[size + 6], walk[size + 7], walk[size + 8], walk[size + 9] = dx, dy, turn, via
-        size = size + 9
+
+        local move = self:_take()
+        move.cell, move.x, move.y, move.dx, move.dy = cell, nx, ny, ndx, ndy
+        move.ox, move.oy, move.turn, move.via = dx, dy, turn, via
+        chain[#chain + 1] = move
+
         x, y, dx, dy, cell = nx, ny, ndx, ndy, target
     end
+end
 
-    for i = 1, size, 9 do
-        chain[#chain + 1] = {
-            cell = walk[i],
-            x = walk[i + 1],
-            y = walk[i + 2],
-            dx = walk[i + 3],
-            dy = walk[i + 4],
-            ox = walk[i + 5],
-            oy = walk[i + 6],
-            turn = walk[i + 7],
-            via = walk[i + 8]
-        }
+function Movement:_trail(chain, x, y, dx, dy, force)
+    local size, seen = #chain, {}
+    for _, move in ipairs(chain) do
+        seen[move.cell] = true
     end
-    return chain
+
+    local wx, wy = -dx, -dy
+    while true do
+        local walk = self:_route(x, y, wx, wy, true)
+        local cell = walk and walk.target
+        if not cell or seen[cell] then return true end
+
+        local ox, oy = -walk.dx, -walk.dy
+        if not cell:pushable(ox, oy) then return true end
+
+        force = force + cell:force(ox, oy, "pull")
+        if force <= 0 then
+            for i = #chain, size + 1, -1 do
+                chain[i] = nil
+            end
+            return false
+        end
+
+        seen[cell] = true
+
+        local entry = self:_take()
+        entry.cell, entry.x, entry.y, entry.dx, entry.dy = cell, x, y, -wx, -wy
+        entry.ox, entry.oy, entry.turn, entry.via = ox, oy, walk.turn, walk.via
+        chain[#chain + 1] = entry
+
+        x, y, wx, wy = walk.x, walk.y, walk.dx, walk.dy
+    end
 end
 
 function Movement:_drive(chain, action)
@@ -145,6 +181,7 @@ end
 
 function Movement:_shift(chain, silent)
     local grid = self.grid
+    self.moves = self.moves + #chain
 
     for _, move in ipairs(chain) do
         grid:set(move.cell.x, move.cell.y)
@@ -152,7 +189,7 @@ function Movement:_shift(chain, silent)
 
     for _, move in ipairs(chain) do
         local occupant = grid:get(move.x, move.y)
-        if occupant and occupant:eats(move.dx, move.dy) then move.eater = occupant end
+        move.eater = occupant and occupant:eats(move.dx, move.dy) and occupant or nil
     end
 
     for i, move in ipairs(chain) do
@@ -178,6 +215,7 @@ function Movement:nudge(x, y, dx, dy)
     local nudger = self.grid:get(x, y)
     if not nudger then return false end
 
+    self.top = 0
     local move = self:_route(x, y, dx, dy)
     if not move or not self:_open(move.x, move.y, move.dx, move.dy) then return false end
 
@@ -193,6 +231,7 @@ function Movement:push(x, y, dx, dy, force)
     force = (force or constants.force.push) + pusher:force(dx, dy, "push")
     if force <= 0 then return false end
 
+    self.top = 0
     local move = self:_route(x, y, dx, dy)
     if not move then return false end
 
@@ -206,10 +245,10 @@ function Movement:push(x, y, dx, dy, force)
 end
 
 function Movement:pull(x, y, dx, dy, force)
-    local grid = self.grid
-    local puller = grid:get(x, y)
+    local puller = self.grid:get(x, y)
     if not puller then return false end
 
+    self.top = 0
     local move = self:_route(x, y, dx, dy)
     if not move or not self:_open(move.x, move.y, move.dx, move.dy) then return false end
 
@@ -217,36 +256,32 @@ function Movement:pull(x, y, dx, dy, force)
     if force <= 0 then return false end
 
     move.cell = puller
-    local chain, seen = { move }, { [puller] = true }
-    local px, py, wx, wy = x, y, -dx, -dy
-
-    while true do
-        local walk = self:_route(px, py, wx, wy, true)
-        local cell = walk and walk.target
-        if not cell or seen[cell] then break end
-
-        local ox, oy = -walk.dx, -walk.dy
-        if not cell:pushable(ox, oy) then break end
-
-        force = force + cell:force(ox, oy, "pull")
-        if force <= 0 then return false end
-
-        seen[cell] = true
-        chain[#chain + 1] = {
-            cell = cell,
-            x = px,
-            y = py,
-            dx = -wx,
-            dy = -wy,
-            ox = ox,
-            oy = oy,
-            turn = walk.turn,
-            via = walk.via
-        }
-        px, py, wx, wy = walk.x, walk.y, walk.dx, walk.dy
-    end
+    local chain = { move }
+    if not self:_trail(chain, x, y, dx, dy, force) then return false end
 
     self:_drive(chain, "pull")
+    self:_shift(chain)
+    return true
+end
+
+function Movement:advance(x, y, dx, dy)
+    local advancer = self.grid:get(x, y)
+    if not advancer then return false end
+
+    local push = constants.force.push + advancer:force(dx, dy, "push")
+    local pull = constants.force.pull + advancer:force(dx, dy, "pull")
+    if push <= 0 then return false end
+
+    self.top = 0
+    local move = self:_route(x, y, dx, dy)
+    if not move then return false end
+
+    move.cell = advancer
+    local chain = self:_line(move.x, move.y, move.dx, move.dy, push, { move })
+    if not chain then return false end
+
+    self:_trail(chain, x, y, dx, dy, pull)
+    self:_drive(chain, "push")
     self:_shift(chain)
     return true
 end
@@ -256,6 +291,7 @@ function Movement:generate(x, y, dx, dy, options)
     local generator = grid:get(x, y)
     if not generator then return false end
 
+    self.top = 0
     options = options or {}
     local sx, sy = -dx, -dy
     if options.source then

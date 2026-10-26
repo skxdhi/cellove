@@ -9,6 +9,9 @@ local shadow = constants.renderer.shadow
 local box = constants.renderer.box
 local mark = constants.renderer.marker
 local blast = constants.renderer.explosion
+local far = constants.renderer.far
+local flat = constants.renderer.flat
+local clear = constants.renderer.clear
 local tag = constants.renderer.tag
 local tile = constants.grid.tile
 local colors = constants.ui.colors
@@ -35,6 +38,10 @@ local function append(list, other)
     list.n = list.n + other.n
 end
 
+local function paint(data, x, y, tint)
+    data:setPixel(x, y, tint[1], tint[2], tint[3], tint[4])
+end
+
 local function place(batch, size, x, y)
     batch:add((x - 0.5) * tile, (y - 0.5) * tile, 0, size.scale, size.scale, size.x, size.y)
 end
@@ -51,6 +58,8 @@ function Renderer.new(data)
     self.queue = { n = 0 }
     self.rest = { n = 0 }
     self.tail = { n = 0 }
+    self.cache = {}
+    self.profile = { collect = 0, layer = 0 }
     self.labels = setmetatable({}, weak)
     self.shadowShader = love.graphics.newShader(shadow.shader)
     self.backgroundQuad = love.graphics.newQuad(0, 0, 1, 1, 1, 1)
@@ -67,11 +76,14 @@ function Renderer:_path(folder, file)
     return self.texturePacks:find(folder, file)
 end
 
+function Renderer:_image(folder, name)
+    return self:_path(folder, name .. ".png") or self:_path(config.missing.folder, config.missing.name .. ".png")
+end
+
 function Renderer:_textures(folder)
     return setmetatable({}, {
         __index = function(cache, name)
-            local path = self:_path(folder, name .. ".png") or self:_path(config.missing.folder, config.missing.name .. ".png")
-            local image = love.graphics.newImage(path)
+            local image = love.graphics.newImage(self:_image(folder, name))
             local width, height = image:getDimensions()
 
             self.sizes[image] = {
@@ -88,6 +100,27 @@ end
 function Renderer:_sprite(name)
     local texture = self.textures.cells[name]
     return texture, self.sizes[texture]
+end
+
+function Renderer:_average(folder, name)
+    local data = love.image.newImageData(self:_image(folder, name))
+    local width, height = data:getDimensions()
+    local r, g, b, a = 0, 0, 0, 0
+
+    for y = 0, height - 1 do
+        for x = 0, width - 1 do
+            local pr, pg, pb, pa = data:getPixel(x, y)
+            r, g, b, a = r + pr * pa, g + pg * pa, b + pb * pa, a + pa
+        end
+    end
+
+    return a > 0 and { r / a, g / a, b / a, a / (width * height) } or clear
+end
+
+function Renderer:_tint(name)
+    local tint = self.tints[name] or self:_average("cells", name)
+    self.tints[name] = tint
+    return tint
 end
 
 function Renderer:_queue(list, cell, x, y, progress, dying)
@@ -241,6 +274,96 @@ function Renderer:_label(item, color, alpha)
     return label
 end
 
+function Renderer:_drawLayer(simulator, progress)
+    local profile, start = self.profile, love.timer.getTime()
+
+    self:_collect(simulator, progress)
+    profile.collect = (love.timer.getTime() - start) * 1000
+
+    if self.shadows and self.camera.zoom >= far then
+        love.graphics.setShader(self.shadowShader)
+        love.graphics.setColor(utils.fromHex(0x000000, shadow.alpha))
+        self:_drawCells(shadow.offset)
+        love.graphics.setShader()
+        love.graphics.setColor(utils.fromHex(colors.white))
+    end
+    self:_drawBorder(simulator.grid)
+    self:_drawCells(0)
+    profile.layer = (love.timer.getTime() - start) * 1000
+end
+
+function Renderer:_drawFlat(grid)
+    local map = self.map
+    local width, height = grid.width, grid.height
+
+    if map.grid ~= grid or map.width ~= width or map.height ~= height then
+        local border = self:_tint("ghost")
+
+        map.data = love.image.newImageData(width + 2, height + 2)
+        for x = 0, width + 1 do
+            paint(map.data, x, 0, border)
+            paint(map.data, x, height + 1, border)
+        end
+        for y = 1, height do
+            paint(map.data, 0, y, border)
+            paint(map.data, width + 1, y, border)
+        end
+
+        map.image = love.graphics.newImage(map.data)
+        map.image:setFilter("nearest", "nearest")
+        map.grid, map.width, map.height, map.version, map.last = grid, width, height, nil, {}
+    end
+
+    if map.version ~= grid.version then
+        local data, last = map.data, map.last
+
+        for i = 1, width * height do
+            local cell = grid.cells[i]
+            local tint = cell and self:_tint(getmetatable(cell).texture) or clear
+
+            if last[i] ~= tint then
+                last[i] = tint
+                paint(data, (i - 1) % width + 1, math.floor((i - 1) / width) + 1, tint)
+            end
+        end
+
+        map.image:replacePixels(data)
+        map.version = grid.version
+    end
+
+    love.graphics.setColor(utils.fromHex(colors.white))
+    love.graphics.draw(map.image, -tile, -tile, 0, tile, tile)
+end
+
+function Renderer:_drawFar(simulator, progress)
+    local cache, grid, camera = self.cache, simulator.grid, self.camera
+    local width, height = Display.size()
+    local key = table.concat({ tostring(grid), grid.version, camera.x, camera.y, camera.zoom, Display.scale, width, height }, ",")
+
+    if cache.width ~= width or cache.height ~= height then
+        cache.canvas = love.graphics.newCanvas(width, height)
+        cache.width, cache.height, cache.key = width, height, nil
+    end
+
+    if cache.key ~= key or #self.particles.blasts > 0 then
+        local previous = love.graphics.getCanvas()
+
+        love.graphics.setCanvas(cache.canvas)
+        love.graphics.clear(0, 0, 0, 0)
+        self:_drawLayer(simulator, progress)
+        love.graphics.setCanvas(previous)
+        cache.key = key
+    end
+
+    love.graphics.push()
+    love.graphics.origin()
+    love.graphics.setBlendMode("alpha", "premultiplied")
+    love.graphics.setColor(utils.fromHex(colors.white))
+    love.graphics.draw(cache.canvas)
+    love.graphics.setBlendMode("alpha")
+    love.graphics.pop()
+end
+
 function Renderer:font(size)
     local font = self.fonts[size]
     if not font then
@@ -381,6 +504,7 @@ function Renderer:loadTextures()
         texture = background,
         width = width,
         height = height,
+        tint = self:_average("ui", "background"),
         cols = 0,
         rows = 0
     }
@@ -390,6 +514,9 @@ function Renderer:loadTextures()
         rows = 0
     }
 
+    self.tints = {}
+    self.map = {}
+    self.cache.key = nil
     if self.classes then self:preload(self.classes) end
 end
 
@@ -401,9 +528,10 @@ function Renderer:preload(classes, first, last)
 end
 
 function Renderer:draw(simulator, progress, markers)
-    if not self.animated then progress = 1 end
-
     local grid, back = simulator.grid, self.back
+    local distant, minimal = self.camera.zoom < far, self.camera.zoom < flat
+
+    if distant or not self.animated then progress = 1 end
 
     love.graphics.clear(utils.fromHex(colors.dark))
     love.graphics.push()
@@ -414,22 +542,23 @@ function Renderer:draw(simulator, progress, markers)
     love.graphics.setColor(utils.fromHex(colors.dark))
     love.graphics.rectangle("fill", 0, 0, grid.width * tile, grid.height * tile)
 
-    self:_fitBackground(grid)
-    love.graphics.setColor(utils.fromHex(colors.white))
-    love.graphics.draw(back.texture, self.backgroundQuad, 0, 0, 0, tile / back.width, tile / back.height)
+    if minimal then
+        love.graphics.setColor(back.tint)
+        love.graphics.rectangle("fill", 0, 0, grid.width * tile, grid.height * tile)
+    else
+        self:_fitBackground(grid)
+        love.graphics.setColor(utils.fromHex(colors.white))
+        love.graphics.draw(back.texture, self.backgroundQuad, 0, 0, 0, tile / back.width, tile / back.height)
+    end
 
     self:_drawPlaceables(markers)
-    self:_collect(simulator, progress)
-
-    if self.shadows and self.camera.zoom >= shadow.minZoom then
-        love.graphics.setShader(self.shadowShader)
-        love.graphics.setColor(utils.fromHex(0x000000, shadow.alpha))
-        self:_drawCells(shadow.offset)
-        love.graphics.setShader()
-        love.graphics.setColor(utils.fromHex(colors.white))
+    if minimal then
+        self:_drawFlat(grid)
+    elseif distant then
+        self:_drawFar(simulator, progress)
+    else
+        self:_drawLayer(simulator, progress)
     end
-    self:_drawBorder(grid)
-    self:_drawCells(0)
     if not simulator:started() then self:_drawOverlays(markers, grid) end
     self.particles:draw()
 
