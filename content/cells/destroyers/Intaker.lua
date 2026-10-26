@@ -16,7 +16,7 @@ function Intaker:eats(dx, dy)
 end
 
 function Intaker:update(_, dir)
-    --- uh idk
+    -- uh how do i get the cell in feont of another one
 end
 
 return Intaker
