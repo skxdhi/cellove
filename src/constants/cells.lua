@@ -73,6 +73,10 @@ return {
                 icon = "trash"
             },
             {
+                id = "intakers",
+                title = "Intakers",
+                icon = "intaker"
+            {
                 id = "misc",
                 title = "Miscellaneous",
                 icon = "base",
